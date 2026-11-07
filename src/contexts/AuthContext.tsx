@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useRef, type ReactNode } from 'react';
 import type { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import type { Profile, UserRole } from '../types';
@@ -22,7 +22,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Helper to build a fallback profile from user object metadata
+  // Guard flag to prevent onAuthStateChange from interfering during signUp/signIn
+  const isAuthActionRef = useRef(false);
+
   const buildFallbackProfile = (activeUser: User, overrideRole?: string): Profile => {
     const role = (overrideRole || activeUser.user_metadata?.role || 'player') as UserRole;
     const fullName = activeUser.user_metadata?.full_name || activeUser.email?.split('@')[0] || 'User';
@@ -57,19 +59,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.warn('Profile fetch note:', error.message);
       }
 
-      // If profile record does not exist yet (e.g. trigger delay), synthesize from metadata
       const activeUser = currentUser || user || (await supabase.auth.getUser()).data.user;
       if (activeUser) {
         const fallbackProfile = buildFallbackProfile(activeUser);
         setProfile(fallbackProfile);
 
-        // Try to upsert into profiles in background
+        // Background upsert
         (async () => {
-          try {
-            await supabase.from('profiles').upsert(fallbackProfile);
-          } catch {
-            // Ignore background sync errors
-          }
+          try { await supabase.from('profiles').upsert(fallbackProfile); } catch { /* ignore */ }
         })();
         return fallbackProfile;
       }
@@ -92,7 +89,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    // Get initial session
     const initSession = async () => {
       try {
         const { data: { session: currentSession } } = await supabase.auth.getSession();
@@ -101,11 +97,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(currentUser);
 
         if (currentUser) {
-          // Immediately set temporary profile so UI is never blocked
           const tempProf = buildFallbackProfile(currentUser);
           setProfile(tempProf);
-
-          // Enrich with database profile
           await fetchProfile(currentUser.id, currentUser);
         }
       } catch (err) {
@@ -117,9 +110,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     initSession();
 
-    // Subscribe to auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, newSession) => {
+        // Skip listener updates when we're doing signUp/signIn manually
+        if (isAuthActionRef.current) return;
+
         setSession(newSession);
         const nextUser = newSession?.user ?? null;
         setUser(nextUser);
@@ -142,122 +137,116 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = async (email: string, password: string) => {
     const cleanEmail = email.trim().toLowerCase();
+    isAuthActionRef.current = true;
 
-    // If an existing session for a different user is in localStorage, clear it
-    if (user && user.email?.toLowerCase() !== cleanEmail) {
-      try {
-        await supabase.auth.signOut();
-      } catch {
-        // Ignore signout cleanup errors
-      }
-      setUser(null);
-      setSession(null);
-      setProfile(null);
-    }
-
-    const { data, error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
-    if (error || !data.user) {
-      return { data, error, profile: null };
-    }
-
-    // Immediately establish user, session, and synthesized profile
-    const instantProfile = buildFallbackProfile(data.user);
-    setUser(data.user);
-    setSession(data.session);
-    setProfile(instantProfile);
-
-    // Enrich from DB
-    let fetchedProf: Profile | null = null;
     try {
-      fetchedProf = await fetchProfile(data.user.id, data.user);
-    } catch {
-      fetchedProf = instantProfile;
-    }
+      // Clear stale session for a different user
+      if (user && user.email?.toLowerCase() !== cleanEmail) {
+        try { await supabase.auth.signOut(); } catch { /* ignore */ }
+        setUser(null);
+        setSession(null);
+        setProfile(null);
+      }
 
-    return { data, error: null, profile: fetchedProf || instantProfile };
+      const { data, error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
+      if (error || !data.user) {
+        return { data, error, profile: null };
+      }
+
+      const instantProfile = buildFallbackProfile(data.user);
+      setUser(data.user);
+      setSession(data.session);
+      setProfile(instantProfile);
+
+      let fetchedProf: Profile | null = null;
+      try {
+        fetchedProf = await fetchProfile(data.user.id, data.user);
+      } catch {
+        fetchedProf = instantProfile;
+      }
+
+      return { data, error: null, profile: fetchedProf || instantProfile };
+    } finally {
+      isAuthActionRef.current = false;
+    }
   };
 
   const signUp = async (email: string, password: string, fullName: string, role: string) => {
     const cleanEmail = email.trim().toLowerCase();
     const cleanName = fullName.trim();
+    isAuthActionRef.current = true;
 
-    // Clear any active session first to guarantee clean registration
-    if (user) {
-      try {
-        await supabase.auth.signOut();
-      } catch {
-        // Ignore signout cleanup errors
-      }
+    try {
+      // Always clear current session before new registration
+      try { await supabase.auth.signOut(); } catch { /* ignore */ }
       setUser(null);
       setSession(null);
       setProfile(null);
-    }
 
-    const { data, error } = await supabase.auth.signUp({
-      email: cleanEmail,
-      password,
-      options: {
-        data: {
-          full_name: cleanName,
-          role,
+      const { data, error } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password,
+        options: {
+          data: {
+            full_name: cleanName,
+            role,
+          },
         },
-      },
-    });
+      });
 
-    if (error) {
-      return { data, error, profile: null };
-    }
+      if (error) {
+        return { data, error, profile: null };
+      }
 
-    // Detect duplicate email silently returned by Supabase (identities = [])
-    if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-      return {
-        data: null,
-        error: {
-          message: 'An account with this email already exists. Please sign in instead.',
-        },
-        profile: null,
-      };
-    }
+      // Detect duplicate email (identities = [])
+      if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+        return {
+          data: null,
+          error: { message: 'An account with this email already exists. Please sign in instead.' },
+          profile: null,
+        };
+      }
 
-    // If Supabase did not return a session directly, auto sign-in
-    let activeSession = data.session;
-    let activeUser = data.user;
+      let activeSession = data.session;
+      let activeUser = data.user;
 
-    if (!activeSession && cleanEmail && password) {
-      try {
-        const signInRes = await supabase.auth.signInWithPassword({
-          email: cleanEmail,
-          password,
-        });
-        if (signInRes.data?.session) {
-          activeSession = signInRes.data.session;
-          activeUser = signInRes.data.user;
-        } else if (signInRes.error) {
-          console.warn('Post-signup auto-login notice:', signInRes.error.message);
+      // Auto sign-in if no session returned
+      if (!activeSession && cleanEmail && password) {
+        try {
+          const signInRes = await supabase.auth.signInWithPassword({
+            email: cleanEmail,
+            password,
+          });
+          if (signInRes.data?.session) {
+            activeSession = signInRes.data.session;
+            activeUser = signInRes.data.user;
+          } else if (signInRes.error) {
+            console.warn('Post-signup auto-login notice:', signInRes.error.message);
+          }
+        } catch (signInErr) {
+          console.warn('Auto sign-in exception:', signInErr);
         }
-      } catch (signInErr) {
-        console.warn('Auto sign-in exception:', signInErr);
       }
-    }
 
-    // Immediately build and assign profile
-    let finalProfile: Profile | null = null;
-    if (activeUser) {
-      finalProfile = buildFallbackProfile(activeUser, role);
-      setUser(activeUser);
-      setSession(activeSession);
-      setProfile(finalProfile);
+      let finalProfile: Profile | null = null;
+      if (activeUser) {
+        finalProfile = buildFallbackProfile(activeUser, role);
+        setUser(activeUser);
+        setSession(activeSession);
+        setProfile(finalProfile);
 
-      // Attempt to load from DB or persist fallback
-      try {
-        const dbProfile = await fetchProfile(activeUser.id, activeUser);
-        if (dbProfile) finalProfile = dbProfile;
-      } catch {
-        // Fallback is already assigned
+        try {
+          const dbProfile = await fetchProfile(activeUser.id, activeUser);
+          if (dbProfile) finalProfile = dbProfile;
+        } catch {
+          // Fallback already assigned
+        }
       }
-    }
 
-    return { data, error: null, profile: finalProfile };
+      return { data, error: null, profile: finalProfile };
+    } finally {
+      isAuthActionRef.current = false;
+    }
   };
 
   const signOut = async () => {
