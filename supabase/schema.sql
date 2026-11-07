@@ -432,3 +432,4 @@ DROP POLICY IF EXISTS "Players can view own match participation" ON public.match
 CREATE POLICY "Players can view own match participation" ON public.match_participants
     FOR SELECT TO authenticated
     USING (player_id IN (SELECT id FROM public.players WHERE user_id = auth.uid()));
+

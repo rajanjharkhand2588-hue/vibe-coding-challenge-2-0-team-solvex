@@ -171,21 +171,23 @@ export default function ScoutDashboard() {
               {playerMatches.length === 0 ? (
                 <p style={{ color: '#64748b', fontSize: 14 }}>No match data available</p>
               ) : (
-                <table>
-                  <thead><tr><th>Date</th><th>Opponent</th><th>Score</th></tr></thead>
-                  <tbody>
-                    {playerMatches.map((m) => {
-                      const participant = m.match_participants?.find((mp) => mp.player_id === viewPlayer.player_id);
-                      return (
-                        <tr key={m.id}>
-                          <td>{new Date(m.match_date).toLocaleDateString()}</td>
-                          <td style={{ fontWeight: 500 }}>{m.opponent}</td>
-                          <td><span className="badge badge-primary">{participant?.score ?? '—'}</span></td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                <div className="table-container">
+                  <table>
+                    <thead><tr><th>Date</th><th>Opponent</th><th>Score</th></tr></thead>
+                    <tbody>
+                      {playerMatches.map((m) => {
+                        const participant = m.match_participants?.find((mp) => mp.player_id === viewPlayer.player_id);
+                        return (
+                          <tr key={m.id}>
+                            <td>{new Date(m.match_date).toLocaleDateString()}</td>
+                            <td style={{ fontWeight: 500 }}>{m.opponent}</td>
+                            <td><span className="badge badge-primary">{participant?.score ?? '—'}</span></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           </div>

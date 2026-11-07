@@ -27,6 +27,15 @@ export default function DashboardLayout() {
     if (window.innerWidth <= 1024) {
       setSidebarOpen(false);
     }
+    const handleResize = () => {
+      if (window.innerWidth <= 1024) {
+        setSidebarOpen(false);
+      } else {
+        setSidebarOpen(true);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, [location.pathname]);
 
   const pageTitle = pageTitles[location.pathname] || 'Dashboard';

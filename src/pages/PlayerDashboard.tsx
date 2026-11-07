@@ -215,7 +215,7 @@ export default function PlayerDashboard() {
             <div className="card-header">
               <h3 style={{ margin: 0, fontSize: '1rem' }}>Attendance History</h3>
             </div>
-            <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+            <div className="table-container" style={{ maxHeight: 400, overflowY: 'auto', overflowX: 'auto' }}>
               {attendanceHistory.length === 0 ? (
                 <div className="empty-state" style={{ padding: 32 }}><p style={{ color: '#64748b' }}>No attendance records</p></div>
               ) : (
@@ -244,7 +244,7 @@ export default function PlayerDashboard() {
             <div className="card-header">
               <h3 style={{ margin: 0, fontSize: '1rem' }}>Match History</h3>
             </div>
-            <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+            <div className="table-container" style={{ maxHeight: 400, overflowY: 'auto', overflowX: 'auto' }}>
               {matchHistory.length === 0 ? (
                 <div className="empty-state" style={{ padding: 32 }}><p style={{ color: '#64748b' }}>No matches played yet</p></div>
               ) : (
